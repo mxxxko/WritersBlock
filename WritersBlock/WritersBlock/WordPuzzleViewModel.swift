@@ -22,6 +22,8 @@ struct PuzzleState {
     var showSolutionConfirm: Bool = false
     var solutionWasShown: Bool = false
     var prePlaced: Set<Int> = []
+    var hintedSlotId: Int? = nil
+    var showKeepTrying: Bool = false
 
     // Grid metrics — set by PuzzleGridView on appear
     var cellSize: CGFloat = 54
@@ -100,6 +102,7 @@ struct PuzzleState {
     mutating func beginDrag(blockId: Int, at location: CGPoint, grabCell: GridCoordinate = GridCoordinate(row: 0, col: 0)) {
         guard blockId < blocks.count, !blocks[blockId].isPlaced else { return }
         dragState = DragState(blockId: blockId, currentLocation: location, grabCell: grabCell)
+        hintedSlotId = nil
         timerRunning = true
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
@@ -158,15 +161,14 @@ struct PuzzleState {
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
     }
 
-    /// Rotates a random unplaced block to its correct solution orientation.
-    /// The user still has to find where to place it.
+    /// Highlights a random unsolved slot's clue and grid cells.
     @discardableResult
     mutating func applyHint() -> Int? {
-        let unplaced = blocks.indices.filter { !blocks[$0].isPlaced && !prePlaced.contains($0) }
-        guard let blockId = unplaced.randomElement() else { return nil }
-        blocks[blockId] = puzzle.blocks[blockId]
+        let unsolved = slots.filter { $0.validationState != .valid }
+        guard let slot = unsolved.randomElement() else { return nil }
+        hintedSlotId = slot.id
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
-        return blockId
+        return slot.id
     }
 
     mutating func showSolution() {
@@ -205,6 +207,8 @@ struct PuzzleState {
         isSolved = false
         showSolvedSheet = false
         showSolutionConfirm = false
+        showKeepTrying = false
+        hintedSlotId = nil
         timerRunning = true
         revalidateAllSlots()
     }
@@ -218,10 +222,9 @@ struct PuzzleState {
         guard isPractice, let s = seed else { return nil }
         let prefix: String
         switch difficulty {
-        case .easy:        prefix = "E"
-        case .normal:      prefix = "N"
-        case .hard:        prefix = "H"
-        case .challenging: prefix = "C"
+        case .easy:   prefix = "E"
+        case .normal: prefix = "N"
+        case .hard:   prefix = "H"
         }
         return "\(prefix)\(s)"
     }
@@ -232,20 +235,16 @@ struct PuzzleState {
         guard let drag = dragState else { ghostResult = nil; return }
         let block = blocks[drag.blockId]
         let gs = puzzle.gridSize
-
-        let borderOffset: CGFloat = 0
         let cellStep = cellSize + gap
 
-        let fx = location.x - gridOrigin.x - borderOffset - cellSize / 2
+        let fx = location.x - gridOrigin.x - cellSize / 2
         let fingerCol = Int(round(fx / cellStep))
-
-        let fyBottom = (location.y - 0.5 * cellSize) - gridOrigin.y - borderOffset - cellSize / 2
+        let fyBottom = (location.y - 0.5 * cellSize) - gridOrigin.y - cellSize / 2
         let bottomRow = Int(round(fyBottom / cellStep))
-
         let col = fingerCol
         let row = bottomRow - (block.rows - 1) + block.rows / 2
 
-        guard bottomRow >= 0 && bottomRow < gs && col + block.cols > 0 && col < gs else {
+        guard row + block.rows > 0 && row < gs && col + block.cols > 0 && col < gs else {
             ghostResult = nil
             return
         }
@@ -257,17 +256,7 @@ struct PuzzleState {
         let notAnchor = targetCells.allSatisfy { !puzzle.anchors.contains($0) }
         let notPlaced = targetCells.allSatisfy { placedLetters[$0] == nil }
 
-        let physicallyValid = inBounds && notBlack && notAnchor && notPlaced
-
-        var isValid = physicallyValid
-        if physicallyValid {
-            // Build hypothetical letters map for slot check
-            var dropped: [GridCoordinate: Character] = [:]
-            for (tc, bc) in zip(targetCells, block.cells) {
-                if let letter = block.letters[bc] { dropped[tc] = letter }
-            }
-            isValid = !wouldCompleteInvalidSlot(droppedLetters: dropped)
-        }
+        let isValid = inBounds && notBlack && notAnchor && notPlaced
 
         let wasValid = ghostResult?.isValid
         if wasValid != isValid { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
@@ -276,18 +265,6 @@ struct PuzzleState {
     }
 
     // MARK: - Slot validation
-
-    private func wouldCompleteInvalidSlot(droppedLetters: [GridCoordinate: Character]) -> Bool {
-        for slot in puzzle.slots {
-            let slotLetters: [Character?] = slot.cells.map { coord in
-                droppedLetters[coord] ?? placedLetters[coord]?.letter
-            }
-            guard slotLetters.allSatisfy({ $0 != nil }) else { continue }
-            let word = String(slotLetters.compactMap { $0 })
-            if !WordValidator.shared.isValid(word) { return true }
-        }
-        return false
-    }
 
     private mutating func revalidateSlots(for affectedCells: Set<GridCoordinate>) {
         for i in slots.indices {
@@ -311,9 +288,15 @@ struct PuzzleState {
 
     private mutating func checkSolved() {
         guard blocks.allSatisfy(\.isPlaced) else { return }
-        guard slots.allSatisfy({ $0.validationState == .valid }) else { return }
+        guard slots.allSatisfy({ $0.validationState == .valid }) else {
+            showKeepTrying = true
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+            return
+        }
         isSolved = true
         showSolvedSheet = true
+        showKeepTrying = false
+        hintedSlotId = nil
         timerRunning = false
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }

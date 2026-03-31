@@ -1,5 +1,4 @@
 import SwiftUI
-import UIKit
 
 // MARK: - FlyingBlock
 
@@ -25,9 +24,9 @@ struct PuzzleView: View {
     @State private var puzzleAreaWidth: CGFloat = 0
     @State private var flyingBlocks: [FlyingBlock] = []
     @State private var flyingAnimating = false
-    @State private var showShareSheet = false
-    @State private var shareSheetText = ""
     @State private var showHintConfirm = false
+    @State private var tappedClueSlotId: Int? = nil
+    @State private var tappedClueNum: Int? = nil
     let store: AppDataStore
     @Environment(\.scenePhase) private var scenePhase
 
@@ -61,14 +60,25 @@ struct PuzzleView: View {
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
 
-                    Spacer(minLength: 16)
+                    Spacer(minLength: 4)
 
                     PuzzleGridView(vm: vmBind, availableWidth: puzzleAreaWidth)
-                        .padding(.horizontal, 40)
+                        .padding(.horizontal, 60)
 
-                    Spacer(minLength: 16)
+                    Spacer(minLength: 4)
 
-                    statusBar.padding(.bottom, 8)
+                    CluesPanelView(
+                        slots: vm!.slots,
+                        clues: vm!.puzzle.clues,
+                        hintedSlotId: vm!.hintedSlotId,
+                        onTap: { slotId, num in
+                            tappedClueSlotId = slotId
+                            tappedClueNum = num
+                        }
+                    )
+                    .padding(.horizontal, 16)
+
+                    statusBar.padding(.top, 4).padding(.bottom, 4)
 
                     VStack(spacing: 0) {
                         BlockBankView(vm: vmBind)
@@ -99,15 +109,33 @@ struct PuzzleView: View {
                 if showHintConfirm {
                     GameDialog(
                         title: "Use a hint?",
-                        message: "Reveals the correct orientation of one block. You have \(store.hintTokens) hint\(store.hintTokens == 1 ? "" : "s") remaining.",
-                        primaryLabel: "Use hint",
+                        message: "Highlights a word clue and its location on the grid.",
+                        primaryLabel: "Show hint",
                         primaryIsDestructive: false,
                         primaryAction: {
                             showHintConfirm = false
-                            if store.useHint() { vm?.applyHint() }
+                            vm?.applyHint()
                         },
                         dismissLabel: "Cancel",
                         onDismiss: { showHintConfirm = false }
+                    )
+                }
+
+                if vm!.showKeepTrying {
+                    GameDialog(
+                        title: "Not quite!",
+                        message: "All blocks are placed but some words aren't right. Check the highlighted slots and try rearranging.",
+                        dismissLabel: "Keep trying",
+                        onDismiss: { vm?.showKeepTrying = false }
+                    )
+                }
+
+                if tappedClueSlotId != nil {
+                    GameDialog(
+                        title: "Clue \(tappedClueNum.map { String($0) } ?? "")",
+                        message: vm!.puzzle.clues[tappedClueSlotId!] ?? "",
+                        dismissLabel: "Got it",
+                        onDismiss: { tappedClueSlotId = nil; tappedClueNum = nil }
                     )
                 }
             } else {
@@ -146,16 +174,12 @@ struct PuzzleView: View {
                 Color.clear
                     .onAppear {
                         zstackOrigin    = geo.frame(in: .global).origin
-                        puzzleAreaWidth = min(geo.size.width, 680) - 80
+                        puzzleAreaWidth = min(geo.size.width, 680) - 120
                     }
                     .onChange(of: geo.frame(in: .global)) { _, frame in zstackOrigin = frame.origin }
-                    .onChange(of: geo.size.width) { _, w in puzzleAreaWidth = w - 80 }
+                    .onChange(of: geo.size.width) { _, w in puzzleAreaWidth = w - 120 }
             }
         )
-        .sheet(isPresented: $showShareSheet) {
-            ShareSheet(items: [shareSheetText])
-                .ignoresSafeArea()
-        }
         .task {
             guard vm == nil else { return }
             await generatePuzzle()
@@ -236,10 +260,11 @@ struct PuzzleView: View {
             let block = vm.blocks[drag.blockId]
             let cs = vm.cellSize
             let gap = vm.gap
-            let h = CGFloat(block.rows) * cs + CGFloat(block.rows - 1) * gap
-            let tly = drag.currentLocation.y - h
+            let cellStep = cs + gap
+            let totalW = CGFloat(block.cols) * cs + CGFloat(block.cols - 1) * gap
+            let totalH = CGFloat(block.rows) * cs + CGFloat(block.rows - 1) * gap
             let cx = drag.currentLocation.x - zstackOrigin.x
-            let cy = tly - zstackOrigin.y + h / 2
+            let cy = drag.currentLocation.y - zstackOrigin.y - totalH / 2
             BlockShapeView(block: block, cellSize: cs, isOverlay: true, gap: gap)
                 .opacity(0.85)
                 .position(x: cx, y: cy)
@@ -287,10 +312,8 @@ struct PuzzleView: View {
 
                 Menu {
                     if let code = vm.shareCode {
-                        Button {
-                            shareSheetText = "Try this Writer's Block puzzle!\nCode: \(code)\n\nOpen Writer's Block → Unlimited → Enter Code"
-                            showShareSheet = true
-                        } label: {
+                        let shareText = "Try this Writer's Block puzzle!\nCode: \(code)\n\nOpen Writer's Block → Unlimited → Enter Code"
+                        ShareLink(item: shareText) {
                             Label("Share Puzzle", systemImage: "square.and.arrow.up")
                         }
                         Divider()
@@ -301,9 +324,9 @@ struct PuzzleView: View {
                         }
                         Divider()
                     }
-                    if !vm.isPractice && store.hintTokens > 0 && !vm.isSolved {
+                    if !vm.isSolved {
                         Button { showHintConfirm = true } label: {
-                            Label("Hint (\(store.hintTokens) left)", systemImage: "lightbulb.fill")
+                            Label("Hint", systemImage: "lightbulb.fill")
                         }
                         Divider()
                     }
@@ -411,5 +434,78 @@ struct PuzzleView: View {
     private func isNewPersonalBest() -> Bool {
         guard let vm = vm, let best = store.personalBest(for: difficulty) else { return true }
         return vm.elapsedSeconds < best
+    }
+}
+
+// MARK: - CluesPanelView
+
+private struct CluesPanelView: View {
+    let slots: [WordSlot]
+    let clues: [Int: String]
+    let hintedSlotId: Int?
+    let onTap: (Int, Int) -> Void   // slotId, display number
+
+    /// Slots sorted by start-cell position (top→bottom, left→right),
+    /// across before down when starting at the same cell. Direction is
+    /// intentionally NOT exposed to the player until a hint is used.
+    private var orderedSlots: [WordSlot] {
+        slots.sorted {
+            let a = $0.cells[0], b = $1.cells[0]
+            if a.row != b.row { return a.row < b.row }
+            if a.col != b.col { return a.col < b.col }
+            return $0.direction == .across
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("Clues")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.eqTextDim)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background(Color.eqSurface)
+
+            Divider().background(Color.eqBorder)
+
+            HStack {
+                Spacer()
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.fixed(36), spacing: 4), count: 5),
+                    spacing: 4
+                ) {
+                    ForEach(Array(orderedSlots.enumerated()), id: \.element.id) { idx, slot in
+                        clueButton(num: idx + 1, slot: slot)
+                    }
+                }
+                .fixedSize(horizontal: true, vertical: false)
+                Spacer()
+            }
+            .padding(.vertical, 8)
+            .background(Color.eqSurface)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.eqBorder, lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private func clueButton(num: Int, slot: WordSlot) -> some View {
+        let isHinted = slot.id == hintedSlotId
+        Button { onTap(slot.id, num) } label: {
+            Text("\(num)")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(isHinted ? .eqAmber : .eqTextDim)
+                .frame(width: 36, height: 28)
+                .background(isHinted ? Color.eqAmber.opacity(0.15) : Color.eqSurface)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(
+                            isHinted ? Color.eqAmber : Color.eqBorder,
+                            lineWidth: isHinted ? 2 : 1
+                        )
+                )
+        }
+        .animation(.easeInOut(duration: 0.2), value: isHinted)
     }
 }

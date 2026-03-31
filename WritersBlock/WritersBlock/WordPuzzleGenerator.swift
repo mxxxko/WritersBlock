@@ -24,7 +24,7 @@ struct SeededRandom: RandomNumberGenerator {
 // MARK: - Generator
 
 struct WordPuzzleGenerator {
-    nonisolated private static let maxRetries = 20
+    nonisolated private static let maxRetries = 50
 
     // MARK: - Public entry points
 
@@ -39,8 +39,13 @@ struct WordPuzzleGenerator {
         return fallback(for: difficulty, seed: targetSeed)
     }
 
+    nonisolated(unsafe) private static var dailyCache: [String: WordPuzzleData] = [:]
+
     nonisolated static func makeDaily(for difficulty: Difficulty, date: Date = Date()) -> WordPuzzleData {
         let dateStr = DateFormatter.isoDate.string(from: date)
+        let cacheKey = "\(dateStr)-\(difficulty.rawValue)"
+        if let cached = dailyCache[cacheKey] { return cached }
+
         let raw = "WB-\(dateStr)-\(difficulty.rawValue)"
         var hash: UInt64 = 14695981039346656037
         for byte in raw.utf8 {
@@ -48,7 +53,9 @@ struct WordPuzzleGenerator {
             hash = hash &* 1099511628211
         }
         let seed = Int(hash % 900_000) + 100_000
-        return make(for: difficulty, seed: seed)
+        let data = make(for: difficulty, seed: seed)
+        dailyCache[cacheKey] = data
+        return data
     }
 
     // MARK: - Generation pipeline
@@ -82,6 +89,10 @@ struct WordPuzzleGenerator {
             WordSlot(id: i, direction: s.direction, cells: s.cells)
         }
 
+        let (clues, slotLabels, cellNumbers) = buildCluesAndLabels(
+            slots: finalSlots, solution: solution, rng: &rng
+        )
+
         return WordPuzzleData(
             gridSize: gridSize,
             solution: solution,
@@ -91,7 +102,10 @@ struct WordPuzzleGenerator {
             blocks: blocks,
             blockSolutions: blockSolutions,
             seed: seed,
-            difficulty: difficulty
+            difficulty: difficulty,
+            clues: clues,
+            slotLabels: slotLabels,
+            cellNumbers: cellNumbers
         )
     }
 
@@ -322,10 +336,41 @@ struct WordPuzzleGenerator {
             gridSize: gs, blacks: blacks, solution: sol, using: &rng
         )
         let finalSlots = slots.enumerated().map { i, s in WordSlot(id: i, direction: s.direction, cells: s.cells) }
+        let (clues, slotLabels, cellNumbers) = buildCluesAndLabels(
+            slots: finalSlots, solution: sol, rng: &rng
+        )
         return WordPuzzleData(
             gridSize: gs, solution: sol, blackSquares: blacks,
             anchors: Set(), slots: finalSlots,
-            blocks: blks, blockSolutions: blkSols, seed: seed, difficulty: .easy
+            blocks: blks, blockSolutions: blkSols, seed: seed, difficulty: .easy,
+            clues: clues, slotLabels: slotLabels, cellNumbers: cellNumbers
         )
+    }
+
+    // MARK: - Clue & label assignment
+
+    nonisolated private static func buildCluesAndLabels(
+        slots: [WordSlot],
+        solution: [[Character]],
+        rng: inout some RandomNumberGenerator
+    ) -> (clues: [Int: String], slotLabels: [Int: String], cellNumbers: [GridCoordinate: Int]) {
+        // Assign crossword numbers to cells that start at least one slot,
+        // ordered top-to-bottom, left-to-right.
+        let startCells = Set(slots.map { $0.cells[0] })
+        let sorted = startCells.sorted { $0.row != $1.row ? $0.row < $1.row : $0.col < $1.col }
+        var cellNumbers: [GridCoordinate: Int] = [:]
+        for (i, cell) in sorted.enumerated() { cellNumbers[cell] = i + 1 }
+
+        var slotLabels: [Int: String] = [:]
+        var clues: [Int: String] = [:]
+        for slot in slots {
+            let num = cellNumbers[slot.cells[0]] ?? 0
+            let dir = slot.direction == .across ? "A" : "D"
+            slotLabels[slot.id] = "\(num)\(dir)"
+            let word = String(slot.cells.map { solution[$0.row][$0.col] })
+            clues[slot.id] = WordValidator.shared.randomClue(for: word, using: &rng)
+                ?? "\(slot.cells.count)-letter word"
+        }
+        return (clues, slotLabels, cellNumbers)
     }
 }

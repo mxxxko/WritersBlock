@@ -3,51 +3,47 @@ import SwiftUI
 // MARK: - Difficulty
 
 enum Difficulty: String, CaseIterable, Hashable {
-    case easy        = "Easy"
-    case normal      = "Normal"
-    case hard        = "Hard"
-    case challenging = "Challenging"
+    case easy   = "Easy"
+    case normal = "Normal"
+    case hard   = "Hard"
 
     nonisolated var gridSize: Int {
         switch self {
-        case .easy, .normal: return 5
-        case .hard, .challenging: return 7
+        case .easy:   return 5
+        case .normal: return 6
+        case .hard:   return 7
         }
     }
 
     nonisolated var blackCount: Int {
         switch self {
-        case .easy: return 6
-        case .normal: return 6
-        case .hard: return 8
-        case .challenging: return 10
+        case .easy:   return 6
+        case .normal: return 8
+        case .hard:   return 10
         }
     }
 
     nonisolated var anchorFraction: Double {
         switch self {
-        case .easy: return 0.30
+        case .easy:   return 0.30
         case .normal: return 0.25
-        case .hard: return 0.22
-        case .challenging: return 0.18
+        case .hard:   return 0.20
         }
     }
 
     var color: Color {
         switch self {
-        case .easy:        return .eqGreen
-        case .normal:      return .eqBrandPurple
-        case .hard:        return .eqAmber
-        case .challenging: return .eqRed
+        case .easy:   return .eqGreen
+        case .normal: return .eqBrandPurple
+        case .hard:   return .eqAmber
         }
     }
 
     var description: String {
         switch self {
-        case .easy:        return "3–4 letter words · 5×5"
-        case .normal:      return "3–5 letter words · 5×5"
-        case .hard:        return "3–6 letter words · 7×7"
-        case .challenging: return "3–7 letter words · 7×7"
+        case .easy:   return "5×5 grid"
+        case .normal: return "6×6 grid"
+        case .hard:   return "7×7 grid"
         }
     }
 }
@@ -116,4 +112,7 @@ struct WordPuzzleData {
     let blockSolutions: [Int: GridCoordinate]   // block id → top-left in solution
     let seed: Int
     let difficulty: Difficulty
+    let clues: [Int: String]                    // slot id → clue text
+    let slotLabels: [Int: String]               // slot id → "3A" / "5D"
+    let cellNumbers: [GridCoordinate: Int]       // cells that start a slot → crossword number
 }

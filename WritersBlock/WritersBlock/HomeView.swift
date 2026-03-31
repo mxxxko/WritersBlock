@@ -303,7 +303,7 @@ struct HomeView: View {
         }
     }
 
-    /// Parses "N394857" → (.normal, 394857) or "C394857" → (.challenging, 394857).
+    /// Parses "N394857" → (.normal, 394857), etc.
     private func parseCode(_ raw: String) -> (Difficulty, Int)? {
         let s = raw.trimmingCharacters(in: .whitespaces).uppercased()
         guard s.count >= 2, let seed = Int(s.dropFirst()), seed > 0 else { return nil }
@@ -311,7 +311,6 @@ struct HomeView: View {
         case "E": return (.easy, seed)
         case "N": return (.normal, seed)
         case "H": return (.hard, seed)
-        case "C": return (.challenging, seed)
         default:  return nil
         }
     }

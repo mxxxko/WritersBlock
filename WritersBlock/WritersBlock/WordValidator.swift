@@ -8,21 +8,28 @@ struct WordValidator: Sendable {
     private let wordChars: [Int: [[Character]]]
     // [length][position][char] → indices into wordChars[length]
     private let posIndex: [Int: [Int: [Character: [Int]]]]
+    private let clueMap: [String: [String]]
 
     nonisolated private init() {
-        guard let url = Bundle.main.url(forResource: "wordlist", withExtension: "txt"),
-              let content = try? String(contentsOf: url, encoding: .utf8) else {
-            wordSet = []
+        guard let jurl = Bundle.main.url(forResource: "wordlist", withExtension: "json"),
+              let jdata = try? Data(contentsOf: jurl),
+              let decoded = try? JSONDecoder().decode([String: [String]].self, from: jdata) else {
+            wordSet   = []
             wordChars = [:]
-            posIndex = [:]
+            posIndex  = [:]
+            clueMap   = [:]
             return
         }
 
-        let parsed = content.components(separatedBy: .newlines)
-            .map { $0.lowercased().trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty && $0.allSatisfy(\.isLetter) }
+        clueMap = decoded
 
-        let unique = Array(Set(parsed))
+        // Sort so word indices in wordChars are stable across app launches,
+        // making seeded puzzle generation fully deterministic.
+        let unique = decoded.keys
+            .map { $0.lowercased() }
+            .filter { !$0.isEmpty && $0.allSatisfy(\.isLetter) }
+            .sorted()
+
         wordSet = Set(unique)
 
         // Group by length and pre-convert to [Character]
@@ -50,14 +57,26 @@ struct WordValidator: Sendable {
         wordSet.contains(word.lowercased())
     }
 
-    /// True iff at least one word of `length` matches `pattern`. O(k) where k = smallest index bucket.
-    nonisolated func hasWords(ofLength length: Int, matching pattern: [Character?]) -> Bool {
+    nonisolated func randomClue(for word: String, using rng: inout some RandomNumberGenerator) -> String? {
+        guard let clues = clueMap[word.lowercased()], !clues.isEmpty else { return nil }
+        return clues.randomElement(using: &rng)
+    }
+
+    /// True iff at least one word of `length` matches `pattern` and is not in `excluding`.
+    nonisolated func hasWords(ofLength length: Int, matching pattern: [Character?], excluding: Set<String> = []) -> Bool {
         guard let chars = wordChars[length], let posIdx = posIndex[length] else { return false }
         let constrained = constrain(pattern)
-        if constrained.isEmpty { return !chars.isEmpty }
+        if constrained.isEmpty {
+            return excluding.isEmpty
+                ? !chars.isEmpty
+                : chars.contains { !excluding.contains(String($0)) }
+        }
         let best = smallest(constrained, in: posIdx)
         guard let seeds = posIdx[best.pos]?[best.ch] else { return false }
-        return seeds.contains { i in constrained.allSatisfy { chars[i][$0.pos] == $0.ch } }
+        return seeds.contains { i in
+            constrained.allSatisfy { chars[i][$0.pos] == $0.ch } &&
+            !excluding.contains(String(chars[i]))
+        }
     }
 
     /// Returns up to `maxCount` random words of `length` matching `pattern`.

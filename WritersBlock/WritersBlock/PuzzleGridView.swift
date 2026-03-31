@@ -51,6 +51,13 @@ struct PuzzleGridView: View {
         let ghostCells  = vm.ghostResult?.targetCells ?? []
         let isGhost     = ghostCells.contains(coord)
         let isValidGhost = vm.ghostResult?.isValid ?? false
+        let hintedCells: Set<GridCoordinate> = {
+            guard let hid = vm.hintedSlotId,
+                  let slot = vm.slots.first(where: { $0.id == hid }) else { return [] }
+            return Set(slot.cells)
+        }()
+        let isHinted = hintedCells.contains(coord)
+        let cellNumber = vm.puzzle.cellNumbers[coord]
 
         if isBlack {
             BlackCellView(size: m.cellSize)
@@ -60,6 +67,8 @@ struct PuzzleGridView: View {
                 placed: placed,
                 isGhost: isGhost,
                 isValidGhost: isValidGhost,
+                isHinted: isHinted,
+                cellNumber: cellNumber,
                 size: m.cellSize
             )
             .gesture(
@@ -112,16 +121,26 @@ struct LetterCellView: View {
     let placed: PlacedLetter?
     let isGhost: Bool
     let isValidGhost: Bool
+    let isHinted: Bool
+    let cellNumber: Int?
     let size: CGFloat
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             cellBackground
+            if let num = cellNumber {
+                Text("\(num)")
+                    .font(.system(size: max(7, size * 0.18), weight: .semibold))
+                    .foregroundColor(placed != nil ? numberColor(for: placed!) : .eqMuted)
+                    .padding(max(2, size * 0.07))
+                    .allowsHitTesting(false)
+            }
             if let p = placed {
                 Text(String(p.letter).uppercased())
                     .font(.system(size: size * 0.44, weight: .bold, design: .rounded))
                     .foregroundColor(letterColor(for: p))
                     .minimumScaleFactor(0.5)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(width: size, height: size)
@@ -148,11 +167,21 @@ struct LetterCellView: View {
                     RoundedRectangle(cornerRadius: 6)
                         .strokeBorder(isValidGhost ? Color.eqGreen : Color.eqRed, lineWidth: 1.5)
                 )
+        } else if isHinted {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.eqAmber.opacity(0.25))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.eqAmber, lineWidth: 1.5))
         } else {
             RoundedRectangle(cornerRadius: 6)
                 .fill(Color.eqSurfaceHigh)
                 .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.eqBorder, lineWidth: 1))
         }
+    }
+
+    private func numberColor(for p: PlacedLetter) -> Color {
+        if p.isAnchor { return .eqAnchorText.opacity(0.7) }
+        guard let blockId = p.blockId else { return .eqMuted }
+        return BlockPalette.forBlock(id: blockId).text.opacity(0.7)
     }
 
     private func letterColor(for p: PlacedLetter) -> Color {

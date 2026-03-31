@@ -3,8 +3,9 @@ import Foundation
 struct WordFillGenerator {
     let validator: WordValidator
     private var iterations = 0
-    private let maxIterations = 3_000
-    private let maxCandidatesPerSlot = 40
+    private let maxIterations = 12_000
+    private let maxCandidatesPerSlot = 60
+    private var usedWords: Set<String> = []
 
     nonisolated init(validator: WordValidator) {
         self.validator = validator
@@ -20,20 +21,36 @@ struct WordFillGenerator {
     ) -> [[Character]]? {
         var grid = Array(repeating: Array(repeating: Character(" "), count: gridSize), count: gridSize)
 
-        // Longest-first = most-constrained-first:
-        // Longer slots have fewer valid words and more intersections.
-        // Placing them first fails fast on bad black-square layouts instead
-        // of discovering dead ends after filling most of the grid.
+        // Longest-first = most-constrained-first.
         let ordered = slots.sorted { $0.length > $1.length }
 
+        // Feasibility pre-check: if any slot has zero candidates on an empty grid, bail immediately.
+        for slot in ordered {
+            if !validator.hasWords(ofLength: slot.length, matching: Array(repeating: nil, count: slot.length)) {
+                return nil
+            }
+        }
+
+        // Precompute which later slots each slot intersects (shares a cell with).
+        // forwardCheck uses this to avoid scanning all remaining slots on every call.
+        var intersections = [[Int]](repeating: [], count: ordered.count)
+        for i in ordered.indices {
+            let cellSet = Set(ordered[i].cells)
+            intersections[i] = ordered.indices.filter { j in
+                j > i && ordered[j].cells.contains(where: { cellSet.contains($0) })
+            }
+        }
+
         iterations = 0
-        guard backtrack(index: 0, slots: ordered, grid: &grid, rng: &rng) else { return nil }
+        usedWords = []
+        guard backtrack(index: 0, slots: ordered, intersections: intersections, grid: &grid, rng: &rng) else { return nil }
         return grid
     }
 
     nonisolated private mutating func backtrack(
         index: Int,
         slots: [WordSlot],
+        intersections: [[Int]],
         grid: inout [[Character]],
         rng: inout some RandomNumberGenerator
     ) -> Bool {
@@ -43,7 +60,7 @@ struct WordFillGenerator {
 
         let slot = slots[index]
 
-        // Build pattern from letters already written by previously placed slots
+        // Build pattern from letters already placed by prior slots.
         var pattern = Array(repeating: Optional<Character>.none, count: slot.length)
         for (i, coord) in slot.cells.enumerated() {
             let ch = grid[coord.row][coord.col]
@@ -51,25 +68,25 @@ struct WordFillGenerator {
         }
 
         let candidates = validator.sampleWords(ofLength: slot.length, matching: pattern, maxCount: maxCandidatesPerSlot, using: &rng)
+            .filter { !usedWords.contains($0) }
 
         for word in candidates {
             let chars = Array(word)
 
-            // Place only the cells that were empty
             for (i, coord) in slot.cells.enumerated() {
                 if pattern[i] == nil { grid[coord.row][coord.col] = chars[i] }
             }
 
-            // Forward check: for every remaining slot that shares a cell with this one,
-            // verify it still has at least one valid candidate. Detects dead ends
-            // immediately rather than after recursing many more levels.
-            if forwardCheck(after: slot, remaining: slots[(index + 1)...], grid: grid) {
-                if backtrack(index: index + 1, slots: slots, grid: &grid, rng: &rng) {
+            usedWords.insert(word)
+
+            if forwardCheck(index: index, slots: slots, intersections: intersections[index], grid: grid) {
+                if backtrack(index: index + 1, slots: slots, intersections: intersections, grid: &grid, rng: &rng) {
                     return true
                 }
             }
 
-            // Undo only the cells this slot wrote
+            usedWords.remove(word)
+
             for (i, coord) in slot.cells.enumerated() {
                 if pattern[i] == nil { grid[coord.row][coord.col] = " " }
             }
@@ -78,24 +95,22 @@ struct WordFillGenerator {
         return false
     }
 
-    /// Returns false if any remaining slot that intersects `placed` now has zero valid candidates.
+    /// Checks that every slot intersecting the just-placed slot still has
+    /// at least one valid, non-duplicate candidate.
     nonisolated private func forwardCheck(
-        after placed: WordSlot,
-        remaining: ArraySlice<WordSlot>,
+        index: Int,
+        slots: [WordSlot],
+        intersections: [Int],
         grid: [[Character]]
     ) -> Bool {
-        let placedCells = Set(placed.cells)
-        for other in remaining {
-            // Only bother checking slots that actually share a cell with the placed slot
-            guard other.cells.contains(where: { placedCells.contains($0) }) else { continue }
-
-            var otherPattern = Array(repeating: Optional<Character>.none, count: other.length)
+        for j in intersections {
+            let other = slots[j]
+            var pattern = Array(repeating: Optional<Character>.none, count: other.length)
             for (i, coord) in other.cells.enumerated() {
                 let ch = grid[coord.row][coord.col]
-                if ch != " " { otherPattern[i] = ch }
+                if ch != " " { pattern[i] = ch }
             }
-
-            if !validator.hasWords(ofLength: other.length, matching: otherPattern) {
+            if !validator.hasWords(ofLength: other.length, matching: pattern, excluding: usedWords) {
                 return false
             }
         }
